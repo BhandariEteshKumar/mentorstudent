@@ -1,72 +1,187 @@
-import dotnev from "dotenv";
-import express, { request, response } from "express";
+import express from "express";
 import { MongoClient } from "mongodb";
-import { checkBooking } from "./checkBooking.js";
-import {
-  deletehalls,
-  insertData,
-  findById,
-  update,
-  getAllhalls,
-  getCustomers,
-} from "./helper.js";
+import dotenv from "dotenv";
+import cors from "cors";
+import { studentsRouter, mentorsRouter } from "./routes.js";
 
-dotnev.config();
-// creating the express server
+dotenv.config();
 const app = express();
-//this method is initiated when we are on home page to retire some values
-app.get("/", function (req, res) {
-  res.send("Hello World");
-});
-
-// getting the mongodb connection url through env file and storing it
+let PORT = process.env.PORT || 5000;
+app.use(express.json());
+app.use(cors());
+// mongo db config
 const MONGO_URL = process.env.MONGO_URL;
 
-//create a connection between app and mongodb
+// create db connection
+
 async function createConnection() {
   const client = new MongoClient(MONGO_URL);
   await client.connect();
-  console.log("Mongo Connected");
+  console.log("DataBase Connected");
   return client;
 }
-// we store the client variable to use the mongodb
+
 export const client = await createConnection();
 
-// we are giving a port number for the app to listen
-app.listen(process.env.PORT, () => {
-  console.log("Server started at PORT ", process.env.PORT);
-});
+app.use("/students", studentsRouter);
+app.use("/mentors", mentorsRouter);
 
-app.get("/halls", async (req, res) => {
-  res.send(await getAllhalls());
-});
-app.get("/halls/customers", async (req, res) => {
-  res.send(await getCustomers());
-});
-//using the express middleware for every request and converting the data to json
-app.use(express.json());
+//  it will reassign all students
 
-//creating the hall
-app.post("/halls/create", async (req, res) => {
-  res.send(await insertData(req.body));
-});
-app.delete("/halls", async (req, res) => {
-  res.send(await deletehalls());
-});
+app.put("/reassign", async (req, res) => {
+  const students = await client
+      .db("mentorstudent")
+      .collection("students")
+      .find()
+      .toArray(),
+    mentors = await client
+      .db("mentorstudent")
+      .collection("mentors")
+      .find()
+      .toArray();
 
-app.post("/halls/bookroom", async (req, res) => {
-  const { RoomID, date, StartTime, EndTime } = req.body;
-  var start = new Date(date + " " + StartTime);
-  var end = new Date(date + " " + EndTime);
-  const data = await findById(RoomID);
-  if (data.Booking) {
-    let arr = data.Booking,
-      flag = true;
-    flag = checkBooking(arr, start, end, flag);
-    if (flag === false) {
-      res.send({ messege: "Already booked in the specificed time" });
-      return;
+  let i = 0; // initialize the loop with 0 @ start
+  let S = students.length; // number of students
+  let M = mentors.length; // number of menotrs
+  let num = S / M; // number of students gonna assign per mentor
+  let menCop = mentors;
+  let stuCop = students;
+
+  num = `${num}`;
+  num = num.split(".");
+  num = !num[1] ? +num.join("") : +num[0] + 1;
+
+  // logic loop
+
+  menCop.forEach(({ name, mentorId, mentorName, students }) => {
+    // mentor loop 2 time
+    let dataForMentor = [];
+    // student loop num times
+    for (let stuLoop = i; stuLoop < i + num; stuLoop++) {
+      if (!stuCop[stuLoop]) {
+        break;
+      } else {
+        dataForMentor.push({
+          name: stuCop[stuLoop].name,
+          studentId: stuCop[stuLoop].studentId,
+          studentName: stuCop[stuLoop].studentName,
+        });
+
+        let updateStudent = client
+          .db("mentorstudent")
+          .collection("students")
+          .updateOne(
+            { studentId: `220${stuLoop + 1}` },
+            {
+              $set: {
+                mentorDetails: { name, mentorId, mentorName },
+                mentorstudent: true,
+              },
+            }
+          );
+      }
     }
+
+    let updateMentor = client
+      .db("mentorstudent")
+      .collection("mentors")
+      .updateOne(
+        { mentorId },
+        {
+          $set: {
+            students: dataForMentor,
+            numOfStudents: dataForMentor.length,
+          },
+        }
+      );
+
+    i = i + num;
+  });
+
+  res.send({ message: "auto assign done" });
+});
+
+//  assign unassigned one
+
+app.put("/assign", async (req, res) => {
+  const students = await client
+      .db("mentorstudent")
+      .collection("students")
+      .find({ mentorstudent: false })
+      .toArray(),
+    mentors = await client
+      .db("mentorstudent")
+      .collection("mentors")
+      .find()
+      .toArray();
+
+  let i = 0; // initialize the loop with 0 @ start
+  let S = students.length; // number of students
+  let M = mentors.length; // number of menotrs
+  let num = S / M; // number of students gonna assign per mentor
+  let menCop = mentors;
+  let stuCop = students,
+    result = [];
+
+  num = `${num}`;
+  num = num.split(".");
+  num = !num[1] ? +num.join("") : +num[0] + 1;
+
+  console.log(S, M, num);
+
+  // logic loop
+  if (S > 0) {
+    menCop.forEach(({ name, mentorId, mentorName, students }) => {
+      // mentor loop 2 time
+      let dataForMentor = [...students];
+      // student loop num times
+      for (let stuLoop = i; stuLoop < i + num; stuLoop++) {
+        if (!stuCop[stuLoop]) {
+          break;
+        } else {
+          dataForMentor.push({
+            name: stuCop[stuLoop].name,
+            studentId: stuCop[stuLoop].studentId,
+            studentName: stuCop[stuLoop].studentName,
+          });
+
+          let updateStudent = client
+            .db("mentorstudent")
+            .collection("students")
+            .updateOne(
+              { studentId: stuCop[stuLoop].studentId },
+              {
+                $set: {
+                  mentorDetails: { name, mentorId, mentorName },
+                  mentorstudent: true,
+                },
+              }
+            );
+        }
+      }
+
+      let updateMentor = client
+        .db("mentorstudent")
+        .collection("mentors")
+        .updateOne(
+          { mentorId },
+          {
+            $set: {
+              students: dataForMentor,
+              numOfStudents: dataForMentor.length,
+            },
+          }
+        );
+
+      i = i + num;
+      result = [...result, ...dataForMentor];
+    });
+    res.send({ message: "auto assign done", data: result });
+  } else {
+    res.send({ message: "all are assigned already" });
   }
-  res.send(await update(RoomID, req.body));
+});
+
+app.listen(PORT, () => {
+  console.log("Server started at " + PORT);
 });
